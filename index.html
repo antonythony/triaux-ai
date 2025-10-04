@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TriAxis AI — Engineering Solver</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{--bg:#0b0f14;--text:#e9f0f6;--muted:#9bb0c2;--panel:#121822;--border:#223042;--accent:#37d2c5}
+    *{box-sizing:border-box} body{margin:0;background:linear-gradient(160deg,#0b0f14 0%,#0f1520 100%);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:900px;margin:0 auto;padding:16px;display:grid;gap:12px}
+    .header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px;background:#0f1520}
+    .logo{display:flex;align-items:center;gap:10px;font-weight:600}
+    .logo .icon{width:26px;height:26px;border-radius:8px;background:conic-gradient(from 210deg,#37d2c5,#8b5cf6);display:grid;place-items:center}
+    .tag{font-size:12px;color:var(--muted);border:1px dashed #2a3a4f;border-radius:999px;padding:6px 10px}
+    .card{border:1px solid var(--border);background:#0f1520;border-radius:12px;padding:12px}
+    label{font-size:12px;color:var(--muted)}
+    select,textarea,button{width:100%;border:1px solid var(--border);border-radius:10px;background:#0b111b;color:var(--text);padding:10px;outline:none}
+    textarea{min-height:110px;resize:vertical}
+    .row{display:flex;gap:8px;flex-wrap:wrap}
+    .row>*{flex:1 1 160px}
+    .chat{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto;padding:6px}
+    .msg{display:flex}.me .bubble{background:rgba(55,210,197,.08)} .bot .bubble{background:rgba(139,92,246,.08)}
+    .bubble{max-width:100%;padding:10px 12px;border-radius:10px;border:1px solid #263247;white-space:pre-wrap}
+    .notice{font-size:12px;color:#ffe3a0;background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.3);padding:8px;border-radius:10px}
+    .footer{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted)}
+    .btn{background:linear-gradient(135deg,rgba(55,210,197,.2),rgba(139,92,246,.18));border:1px solid rgba(55,210,197,.4);cursor:pointer}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center}
+    .modal{background:#0f1520;border:1px solid var(--border);border-radius:12px;padding:16px;max-width:640px;width:92%}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="logo"><div class="icon">△</div>TriAxis AI</div>
+      <div class="tag">Your API key is hidden on the server</div>
+    </div>
+
+    <div class="card">
+      <div class="notice">
+        Don’t enter personal info or secrets. Provide only technical details (loads, dimensions, materials, constraints). Results may be wrong — verify, especially for safety-critical work.
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label>Discipline</label>
+          <select id="discipline">
+            <option>Mechanical</option>
+            <option>Civil</option>
+            <option>Electrical</option>
+          </select>
+        </div>
+        <div>
+          <label>Units</label>
+          <select id="units">
+            <option>SI (metric)</option>
+            <option>Imperial (US)</option>
+          </select>
+        </div>
+        <div>
+          <label>Mode</label>
+          <select id="mode">
+            <option>Solve</option>
+            <option>Explain</option>
+            <option>Check</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>Your problem</label>
+      <textarea id="prompt" placeholder="Example: Design a solid shaft to transmit 28 kW at 1200 rpm, allowable shear stress 60 MPa, length 1.1 m. Find minimum diameter for FOS 2.0 and angle of twist."></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="solveBtn">Solve</button>
+        <button id="askBtn">Generate clarifying questions</button>
+        <button id="resetBtn">Reset chat</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="chat" class="chat"></div>
+    </div>
+
+    <div class="footer">
+      <span>No personal data • Technical info only</span>
+      <span>Powered by OpenRouter (server-side key)</span>
+    </div>
+  </div>
+
+  <!-- Simple terms gate -->
+  <div id="terms" class="modal-bg">
+    <div class="modal">
+      <h3>Before you use TriAxis AI</h3>
+      <ul>
+        <li>Do not input personal data or secrets.</li>
+        <li>Provide only technical details needed to solve the problem.</li>
+        <li>Verify results; get professional review for safety-critical designs.</li>
+      </ul>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="location.reload()">Decline</button>
+        <button class="btn" onclick="document.getElementById('terms').style.display='none'; localStorage.setItem('triaux:agree','yes')">I agree</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Your serverless function will live at /api/openrouter on Vercel
+    const PROXY_URL = '/api/openrouter';
+    const chatEl = document.getElementById('chat');
+    const promptEl = document.getElementById('prompt');
+    const solveBtn = document.getElementById('solveBtn');
+    const askBtn = document.getElementById('askBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const disciplineEl = document.getElementById('discipline');
+    const unitsEl = document.getElementById('units');
+    const modeEl = document.getElementById('mode');
+
+    if (localStorage.getItem('triaux:agree') === 'yes') document.getElementById('terms').style.display='none';
+
+    let messages = [];
+    let busy = false;
+
+    function addMsg(role, text){
+      const row = document.createElement('div');
+      row.className = 'msg ' + (role === 'user' ? 'me' : 'bot');
+      const b = document.createElement('div');
+      b.className = 'bubble';
+      b.textContent = text;
+      row.appendChild(b);
+      chatEl.appendChild(row);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function systemPrompt(){
+      return `You are TriAxis AI, a precise assistant for ${disciplineEl.value} engineering tasks.
+Rules:
+- Ask brief clarifying questions if needed (never ask for personal data).
+- Use ${unitsEl.value.includes('SI') ? 'SI (metric)' : 'Imperial (US)'} units by default; show unit consistency.
+- Mode: ${modeEl.value} (if "Check", verify assumptions, units, boundary conditions).
+- Keep it clear: list assumptions, key equations (symbolic then substituted), and final results with units and safety factors.
+- For safety-critical results, include a caution and suggest professional review.
+- Do not reveal chain-of-thought; provide concise steps, equations, and answers.`;
+    }
+
+    async function callAI(userText){
+      const payload = {
+        model: 'openai/gpt-4o-mini', // choose a model you enabled in OpenRouter
+        temperature: 0.2,
+        messages: [
+          { role:'system', content: systemPrompt() },
+          ...messages,
+          { role:'user', content: userText }
+        ],
+        stream: false
+      };
+
+      const res = await fetch(PROXY_URL, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok){
+        const err = await res.text().catch(()=>res.status);
+        throw new Error(err);
+      }
+
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content || 'No response';
+      return content;
+    }
+
+    async function onSolve(){
+      if (busy) return;
+      const text = promptEl.value.trim();
+      if (!text) return;
+      busy = true; solveBtn.textContent = 'Working...'; solveBtn.disabled = true;
+
+      addMsg('user', text);
+      messages.push({ role:'user', content: text });
+      promptEl.value = '';
+
+      try{
+        const reply = await callAI(text);
+        addMsg('assistant', reply);
+        messages.push({ role:'assistant', content: reply });
+      }catch(e){
+        addMsg('assistant', '⚠️ Error: ' + e.message);
+      } finally {
+        busy = false; solveBtn.textContent = 'Solve'; solveBtn.disabled = false;
+      }
+    }
+
+    async function onAsk(){
+      if (busy) return;
+      const base = promptEl.value.trim() || '(no details yet)';
+      const ask = `Given the following ${disciplineEl.value} problem, ask only the minimal clarifying questions needed to proceed (3–7 bullets). Do not ask for personal data.\n\nProblem:\n${base}`;
+      busy = true; askBtn.textContent = 'Working...'; askBtn.disabled = true;
+
+      addMsg('user', 'Please ask clarifying questions for my problem.');
+      messages.push({ role:'user', content: ask });
+      try{
+        const reply = await callAI(ask);
+        addMsg('assistant', reply);
+        messages.push({ role:'assistant', content: reply });
+      }catch(e){
+        addMsg('assistant', '⚠️ Error: ' + e.message);
+      } finally {
+        busy = false; askBtn.textContent = 'Generate clarifying questions'; askBtn.disabled = false;
+      }
+    }
+
+    solveBtn.addEventListener('click', onSolve);
+    askBtn.addEventListener('click', onAsk);
+    resetBtn.addEventListener('click', ()=>{ messages = []; chatEl.innerHTML=''; });
+
+    // Enter to send
+    promptEl.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        onSolve();
+      }
+    });
+
+    // Welcome
+    addMsg('assistant', 'Welcome to TriAxis AI. Describe your problem and I will solve, explain, or check it. No personal info — technical details only.');
+  </script>
+</body>
+</html>
